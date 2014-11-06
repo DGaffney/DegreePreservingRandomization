@@ -1,0 +1,98 @@
+load 'environment.rb'
+
+task :rewire do
+  stats = CSV.open("stats.csv", "w")
+  stats << ["trial", "diameter", "reciprocity", "betweenness", "average_path_length", "modularity", "clusters", "cocitation"]
+  #todo make wrapper for filling in final stats CSV
+  
+  tmp_name = Digest::MD5.hexdigest(Time.now.to_s)
+  f = CSV.open(File.dirname(__FILE__)+"/tmp/"+tmp_name+".csv", "w")
+  f << ['first', 'second']
+  edge_count = 0
+	Graph.new(GexfExtract.new(File.open("data/aoir.gexf")).graph).anonymize.edgelist.each do |edge|
+	  f << edge
+	  edge_count+=1
+  end
+  f.close
+  f = CSV.open(File.dirname(__FILE__)+"/tmp/"+tmp_name+"_observation.csv", "w", {:col_sep => " "})
+  edge_count = 0
+	Graph.new(GexfExtract.new(File.open("data/aoir.gexf")).graph).anonymize.edgelist.each do |edge|
+	  f << edge
+	  edge_count+=1
+  end
+  f.close
+  `python scripts/stats.py #{"tmp/"+tmp_name+"_observation.csv"}`
+  extract_stats("observation", "stats_tmp/#{tmp_name}_rewired_final.csv")
+  1.upto(1000) do |x|
+    # via http://lists.gnu.org/archive/html/igraph-help/2014-04/msg00003.html
+    # "For instance, this deck of slides states that you need at 
+    # least m/2 * ln(1/epsilon) steps where m is the number of edges and epsilon is 
+    # some kind of tolerance value (although I did not find any definition for 
+    # epsilon in the slides):
+    # http://www.graphanalysis.org/SIAM-CSE13/05_Pinar.pdf
+    # A pretty arbitrary choice of epsilon = 10^-6 would yield ~7 times the number of 
+    # edges."
+    
+    
+    iterations = (edge_count/2 * Math.log(1/0.0000001)).to_i
+    `Rscript scripts/rewirer.r --file tmp/#{tmp_name}.csv --iterations #{iterations} --outfile tmp/#{tmp_name}_rewired.csv`
+    rewired = CSV.open("tmp/#{tmp_name}_rewired_final.csv", "w", {:col_sep => " "})
+    first = true
+    File.open("tmp/#{tmp_name}_rewired.csv").each_line do |line|
+      if first
+        first = false
+      else
+        rewired << [line.split(" ")[1].gsub("\"", ""), line.split(" ")[2].gsub("\"", "")]
+      end
+    end
+    rewired.close
+    `python scripts/stats.py tmp/#{tmp_name}_rewired_final.csv`
+    extract_stats(x, "stats_tmp/#{tmp_name}_rewired_final.csv")
+  end
+  f = CSV.read("stats_tmp/#{tmp_name}_rewired_final.csv")
+  stat_set = {}
+  f.each do |metric, value|
+    stat_set[metric] = eval(value)
+  end
+  f.each_line do |metric, value|
+    if metric == "diameter"
+    elsif metric == "reciprocity"
+    elsif metric == "betweenness"
+    elsif metric == "average_path_length"
+    elsif metric == "modularity"
+    elsif metric == "clusters"
+    elsif metric == "cocitation"
+    end
+  end
+end
+
+task :analyze do
+  full_stats = {"diameter" => [], "reciprocity" => [], "betweenness" => [], "average_path_length" => []}
+  observation = {}
+  `ls stats_tmp`.split("\n").each do |file|
+    print "."
+    f = CSV.read("stats_tmp/"+file)
+    if file.include?("observation")
+      observation = Hash[f]
+      observation.betweenness = eval(observation.betweenness).average
+    else
+      stat_set = {}
+      f.each do |metric, value|
+        next if metric == "vertices" || metric == "cocitation"
+        if metric == "betweenness"
+          full_stats[metric] << eval(value).average
+        else
+          full_stats[metric] << eval(value)
+        end
+      end
+    end
+    print ","
+  end
+  gz = CSV.open("final_stats.csv", "w")
+  gz << ["diameter", "reciprocity", "betweenness", "average_path_length", "observation"]
+  0.upto(full_stats.diameter.length) do |i|
+    gz << [full_stats.diameter[i], full_stats.reciprocity[i], full_stats.betweenness[i], full_stats.average_path_length[i], 0]
+  end
+  gz << [observation.diameter, observation.reciprocity, observation.betweenness, observation.average_path_length, 1]
+  gz.close
+end
